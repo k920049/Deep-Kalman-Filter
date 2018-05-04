@@ -17,9 +17,7 @@ class Q_RNN(object):
         self.size = size
         self.scope = scope
         self.init = tf.random_normal_initializer()
-        self.activation = tf.nn.tanh()
-
-        assert (input.shape[1] == self.time_step), "Input dimension doesn't match with the time step"
+        self.activation = tf.nn.tanh
 
         self.proposal = Network(num_inputs=self.num_inputs,
                                 num_units=self.num_units,
@@ -28,6 +26,9 @@ class Q_RNN(object):
                                 scope_r="recognition")
 
     def build_network(self, status):
+        # assert the data's integrity
+        assert (status.shape[0] == self.time_step), "Input dimension doesn't match with the time step"
+
         # get parameters from the given input(status)
         param_stack = self.proposal.get_latent_samples(status=status)
         list = []
@@ -61,6 +62,9 @@ class Q_RNN(object):
             list.append([q_mean, q_cov, p_mean, p_cov, x_prob, samples])
 
             while len(param_stack) != 0:
+                time = time + 1
+                var = tf.trainable_variables(scope=self.scope)
+                print("Current number of weights in {}-th generative network: {}".format(time, len(var)))
                 [q_mean, q_cov] = param_stack.pop()
                 # transition
                 for i in range(self.num_layers):
@@ -71,7 +75,7 @@ class Q_RNN(object):
                                              name="dense" + str(i))
 
                 samples = q_mean + tf.matmul(tf.random_normal(shape=(1, self.num_units)), q_cov)
-                p_cov = tf.diag(tf.exp(tf.random_normal(shape=(self.num_units))))
+                p_cov = tf.diag(tf.exp(tf.random_normal(shape=(1, self.num_units)))[0])
                 # emission
                 h = tf.layers.dense(inputs=samples,
                                     units=self.num_units,
@@ -100,20 +104,25 @@ class Q_RNN(object):
         sum = 0.0
         for t in range(len(param_list)):
             # transition
-            [q_mean, q_cov, p_mean, p_cov, x_prob, samples] = list.pop()
-            q_dist = MultivariateNormalFullCovariance(loc=q_mean, covariance_matrix=q_cov)
-            p_dist = MultivariateNormalFullCovariance(loc=p_mean, covariance_matrix=p_cov)
-            kl_div = q_dist.kl_divergence(other=p_dist)
+            [q_mean, q_cov, p_mean, p_cov, x_prob, samples] = param_list.pop()
+            kl_div = self.get_divergence(mean1=q_mean, mean2=p_mean, cov1=q_cov, cov2=p_cov)
             sum = sum - kl_div
             # emission
             log_prob = tf.log(x_prob)
             sum = sum + log_prob
+            print("Time {} -> Sum: {}, KL-divergence: {}, log_prob: {}".format(t, sum, kl_div, log_prob))
+        param_list.clear()
         return sum
 
     def get_trainable(self):
         return tf.trainable_variables(scope=self.scope)
 
-
-
-
-
+    @staticmethod
+    def get_divergence(mean1, mean2, cov1, cov2):
+        div = 0.0
+        div = div + tf.log(tf.linalg.det(cov2) / tf.linalg.det(cov1))
+        div = div - tf.cast(x=cov1.shape[0], dtype=tf.float32)
+        div = div + tf.trace(tf.matmul(tf.matrix_inverse(cov2), cov1))
+        diff = mean2 - mean1
+        div = div + tf.matmul(diff, tf.matmul(tf.matrix_inverse(cov2), tf.transpose(diff)))
+        return 0.5 * div

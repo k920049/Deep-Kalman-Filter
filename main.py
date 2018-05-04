@@ -13,7 +13,7 @@ def Main():
 
     with tf.name_scope("network"):
         network = Q_RNN(num_inputs=X_train.shape[2],
-                        num_inputs=X_train.shape[2],
+                        num_units=X_train.shape[2],
                         num_layers=3,
                         time_step=X_train.shape[1],
                         size=1,

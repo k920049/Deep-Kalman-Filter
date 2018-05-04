@@ -7,7 +7,7 @@ from keras.preprocessing import sequence
 import random
 
 # set up user paths
-data_dir = "../resource"
+data_dir = "./resource"
 
 
 def read_data():

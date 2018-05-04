@@ -23,6 +23,8 @@ class Network(object):
             # RNN-like Q network
             prev = None
             for l in range(self.num_levels):
+                var = tf.trainable_variables(scope=self.scope_r)
+                print("Current number of weights in {}-th recognition network: {}".format(l, len(var)))
                 X = tf.reshape(tensor=input[l], shape=[1, self.num_inputs])
                 cur = tf.layers.dense(inputs=X,
                                     units=self.num_units,
