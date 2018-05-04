@@ -8,112 +8,112 @@ from model.Network import Network
 
 class Q_RNN(object):
 
-    def __init__(self, num_layers, num_units, time_step, size, scope):
+    def __init__(self, num_inputs, num_units, num_layers, time_step, size, scope):
 
-        self.num_layers = num_layers
-        # features + vital(1)
+        self.num_inputs = num_inputs
         self.num_units = num_units
+        self.num_layers = num_layers
         self.time_step = time_step
         self.size = size
         self.scope = scope
-        self.init = tf.ones_initializer()
+        self.init = tf.random_normal_initializer()
+        self.activation = tf.nn.tanh()
 
-        assert (
-            input.shape[1] == self.time_step), "Input dimension doesn't match with the time step"
+        assert (input.shape[1] == self.time_step), "Input dimension doesn't match with the time step"
 
-        self.proposal = Network(num_units=self.input.shape[2] + 1,
-                                num_layers=3,
+        self.proposal = Network(num_inputs=self.num_inputs,
+                                num_units=self.num_units,
+                                num_layers=self.num_layers,
                                 num_levels=self.time_step,
                                 scope_r="recognition")
 
-    def _build_network(self, status, input):
-        param_stack = self.proposal.get_latent_samples(status=status, input=input)
-        gen_stack = []
-        # variable scope that contains all the weights
+    def build_network(self, status):
+        # get parameters from the given input(status)
+        param_stack = self.proposal.get_latent_samples(status=status)
+        list = []
         with tf.variable_scope(name_or_scope=self.scope, reuse=tf.AUTO_REUSE):
-            top = True
-            level = 0
-            # at level 0
-            with tf.variable_scope(name_or_scope="level" + str(level), reuse=tf.AUTO_REUSE):
-                [mu, covariace] = param_stack.pop()
-                Q_dist = MultivariateNormalFullCovariance(loc=mu, covariance_matrix=covariace)
-                # Q(Z_{t} | Z_{t - 1}
-                samples = Q_dist.sample(sample_shape=self.size)
-                Q_prob = Q_dist.prob(value=samples)
-                # covariance of P(Z_{t} | Z_{t - 1}, U_{t - 1})
-                with tf.variable_scope(name_or_scope="covariance", reuse=tf.AUTO_REUSE):
-                    G = tf.get_variable(name="G", shape=(self.num_units, self.num_units), dtype=tf.float32)
-                    Z_samples = tf.matmul(samples, G)
-                    prev_covariance = tf.matmul(G, tf.matmul(covariace, tf.transpose(G)))
-
-                # mean of P(X_{t} | Z_{t})
-                with tf.variable_scope(name_or_scope="X", reuse=tf.AUTO_REUSE):
-                    mean = tf.zeros(shape=(1, self.num_units))
-                    X_samples = tf.layers.dense(inputs=Z_covariance,
-                                                units=self.num_units - 1,
-                                                name="F")
-                    X_mu = tf.layers.dense(inputs=mean,
-                                           units=self.num_units - 1,
-                                           name="F")
-                    X_theta = tf.get_variable(name="theta",
-                                              dtype=tf.float32,
-                                              initializer=self.init)
-                    X_dist = MultivariateNormalFullCovariance(loc=mean, covariance_matrix=theta)
-                    X_prob = X_dist.prob(value=X_samples)
-            prev_layer = Z_samples
-            prev_mean = tf.zeros(shape=(1, self.num_units))
-            P_dist = MultivariateNormalFullCovariance(loc=prev_mean, covariance_matrix=prev_covariance)
-            P_prob = P_dist.prob(value=prev_layer)
-            level = level + 1
+            # iterate over the time step
+            # when t == 0
+            time = 0
+            [q_mean, q_cov] = param_stack.pop()
+            samples = q_mean + tf.matmul(tf.random_normal(shape=(1, self.num_units)), q_cov)
+            # transition
+            p_mean = tf.zeros(shape=(1, self.num_units))
+            p_cov = tf.eye(num_rows=self.num_units)
+            # emission
+            h = tf.layers.dense(inputs=samples,
+                                units=self.num_units,
+                                activation=self.activation,
+                                kernel_initializer=self.init,
+                                name="emission")
+            mu = tf.layers.dense(inputs=h,
+                                 units=self.num_units,
+                                 kernel_initializer=self.init,
+                                 name="mu")
+            logd = tf.layers.dense(inputs=h,
+                                   units=self.num_units,
+                                   kernel_initializer=self.init,
+                                   name="logd")
+            cov = tf.diag(tf.exp(logd[0]))
+            x_dist = MultivariateNormalFullCovariance(loc=mu, covariance_matrix=cov)
+            x = tf.reshape(tensor=status[0], shape=(1, self.num_units))
+            x_prob = x_dist.prob(value=x)
+            list.append([q_mean, q_cov, p_mean, p_cov, x_prob, samples])
 
             while len(param_stack) != 0:
-                with tf.variable_scope(name_or_scope="level" + str(level), reuse=tf.AUTO_REUSE):
-                    # get another parameters from the stack
-                    [mu, covariace] = param_stack.pop()
-                    Q_dist = MultivariateNormalFullCovariance(loc=mu, covariance_matrix=covariace)
-                    # Q(Z_{t} | Z_{t - 1}
-                    samples = Q_distdist.sample(sample_shape=self.size)
-                    Q_prob = Q_dist.prob(value=samples)
-                    # covariance of P(Z_{t} | Z_{t - 1}, U_{t - 1})
-                    with tf.variable_scope(name_or_scope="covariance", reuse=tf.AUTO_REUSE):
-                        G = tf.get_variable(name="G",
-                                            shape=(self.num_units, self.num_units),
-                                            dtype=tf.float32)
-                        Z_samples = tf.matmul(samples, G)
-                        prev_covariance = tf.matmul(G, tf.matmul(covariace, tf.transpose(G)))
+                [q_mean, q_cov] = param_stack.pop()
+                # transition
+                for i in range(self.num_layers):
+                    p_mean = tf.layers.dense(inputs=samples,
+                                             units=self.num_units,
+                                             use_bias=False,
+                                             kernel_initializer=self.init,
+                                             name="dense" + str(i))
 
-                    with tf.variable_scope(name_or_scope="forward", reuse=tf.AUTO_REUSE):
-                        cur_layer = prev_layer
-                        for l in range(self.num_layers):
-                            cur_layer = tf.layers.dense(inputs=cur_layer,
-                                                        units=self.num_units,
-                                                        use_bias=False
-                                                        name="G_layer" + str(l))
+                samples = q_mean + tf.matmul(tf.random_normal(shape=(1, self.num_units)), q_cov)
+                p_cov = tf.diag(tf.exp(tf.random_normal(shape=(self.num_units))))
+                # emission
+                h = tf.layers.dense(inputs=samples,
+                                    units=self.num_units,
+                                    activation=self.activation,
+                                    kernel_initializer=self.init,
+                                    name="emission")
+                mu = tf.layers.dense(inputs=h,
+                                     units=self.num_units,
+                                     kernel_initializer=self.init,
+                                     name="mu")
+                logd = tf.layers.dense(inputs=h,
+                                       units=self.num_units,
+                                       kernel_initializer=self.init,
+                                       name="logd")
+                cov = tf.diag(tf.exp(logd[0]))
+                x_dist = MultivariateNormalFullCovariance(loc=mu, covariance_matrix=cov)
+                x = tf.reshape(tensor=status[0], shape=(1, self.num_units))
+                x_prob = x_dist.prob(value=x)
 
-                        for l in range(self.num_layers):
-                            prev_mean = tf.layers.dense(inputs=prev_mean,
-                                                        units=self.num_units,
-                                                        use_bias=False
-                                                        name="G_layer" + str(l))
-                    cur_layer = cur_layer + Z_covariance
-                    P_dist = MultivariateNormalFullCovariance(loc=prev_mean, covariance_matrix=prev_covariance)
-                    P_prob = P_dist.prob(value=cur_layer)
-                    # mean of P(X_{t} | Z_{t})
-                    with tf.variable_scope(name_or_scope="X", reuse=tf.AUTO_REUSE):
-                        X_samples = tf.layers.dense(inputs=cur_layer,
-                                                    units=self.num_units - 1,
-                                                    use_bias=False,
-                                                    name="F")
-                        X_mu = tf.layers.dense(inputs=prev_mean,
-                                               units=self.num_units - 1,
-                                               use_bias=False,
-                                               name="F")
-                        X_theta = tf.get_variable(name="theta",
-                                                  dtype=tf.float32,
-                                                  initializer=self.init)
-                        X_dist = MultivariateNormalFullCovariance(loc=mean, covariance_matrix=theta)
-                        X_prob = X_dist.prob(value=X_samples)
+                list.append([q_mean, q_cov, p_mean, p_cov, x_prob, samples])
 
-                prev_layer = cur_layer
-                level = level + 1
+        return list
+
+    def compute_loss(self, param_list):
+        # iterate over time
+        sum = 0.0
+        for t in range(len(param_list)):
+            # transition
+            [q_mean, q_cov, p_mean, p_cov, x_prob, samples] = list.pop()
+            q_dist = MultivariateNormalFullCovariance(loc=q_mean, covariance_matrix=q_cov)
+            p_dist = MultivariateNormalFullCovariance(loc=p_mean, covariance_matrix=p_cov)
+            kl_div = q_dist.kl_divergence(other=p_dist)
+            sum = sum - kl_div
+            # emission
+            log_prob = tf.log(x_prob)
+            sum = sum + log_prob
+        return sum
+
+    def get_trainable(self):
+        return tf.trainable_variables(scope=self.scope)
+
+
+
+
 
