@@ -1,0 +1,3 @@
+```
+class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
+```
