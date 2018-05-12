@@ -1,8 +1,10 @@
 import tensorflow as tf
 import numpy as np
 
-from model.Network import Network
+from tensorflow.python import debug as tf_debug
 
+from model.Network import Network
+from src.optimizer_helper import regularize, normalize, rescale
 from src.read_data import read_data
 
 save_path = "./resource/snapshot.ckpt"
@@ -33,25 +35,34 @@ def Main():
                           num_transition_units=512,
                           num_emission_layers=3,
                           num_emission_units=X_train.shape[2],
-                          time_step=X_train.shape[1],
-                          scope="network")
+                          time_step=X_train.shape[1])
 
     with tf.name_scope("loss"):
-        loss = network.neg_elbo(X)
+        loss, nll, KL = network.neg_elbo(X)
         ops = []
 
-        recognition_scope       = "network/recognition"
-        generative_scope        = "network/generative"
+        recognition_scope       = "recognition"
+        generative_scope        = "generative"
         recognition_vars        = network.get_variable(recognition_scope)
         generative_vars         = network.get_variable(generative_scope)
-        recognition_optimizer   = tf.train.AdamOptimizer()
-        generative_optimizer    = tf.train.AdamOptimizer()
-        recognition_grad        = recognition_optimizer.compute_gradients(loss, recognition_vars)
-        generative_grad         = generative_optimizer.compute_gradients(loss, generative_vars)
-        recognition_grad        = [(tf.clip_by_value(grad, -1.0, 1.0), var) for grad, var in recognition_grad]
-        generative_grad         = [(tf.clip_by_value(grad, -1.0, 1.0), var) for grad, var in generative_grad]
-        recognition_ops         = recognition_optimizer.apply_gradients(recognition_grad)
-        generative_ops          = generative_optimizer.apply_gradients(generative_grad)
+        loss = regularize(cost=loss, params=recognition_vars, reg_val=0.05, reg_type='l2')
+        loss = regularize(cost=loss, params=generative_vars, reg_val=0.05, reg_type='l2')
+
+
+        recognition_optimizer   = tf.train.AdamOptimizer(learning_rate=1e-3)
+        generative_optimizer    = tf.train.AdamOptimizer(learning_rate=1e-3)
+        recognition_gv          = recognition_optimizer.compute_gradients(loss, recognition_vars)
+        generative_gv           = generative_optimizer.compute_gradients(loss, generative_vars)
+        recognition_grads       = [grad for grad, var in recognition_gv]
+        generative_grads        = [grad for grad, var in generative_gv]
+        recognition_vars        = [var for grad, var in recognition_gv]
+        generative_vars         = [var for grad, var in generative_gv]
+        recognition_grads       = normalize(recognition_grads, 1.0)
+        generative_grads        = normalize(generative_grads, 1.0)
+        recognition_gv          = list(zip(recognition_grads, recognition_vars))
+        generative_gv           = list(zip(generative_grads, generative_vars))
+        recognition_ops         = recognition_optimizer.apply_gradients(recognition_gv)
+        generative_ops          = generative_optimizer.apply_gradients(generative_gv)
 
         ops.append(recognition_ops)
         ops.append(generative_ops)
@@ -61,6 +72,8 @@ def Main():
         saver = tf.train.Saver()
 
     with tf.Session() as sess:
+        # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+
         sess.run(init)
         epoch = 1
         index = 0
@@ -74,10 +87,11 @@ def Main():
                 batch = np.stack(batch, axis=0)
             except StopIteration:
                 batch_gen = get_batch(X_train, 128)
+                epoch = epoch + 1
                 continue
 
-            l, _ = sess.run([loss, ops], feed_dict={X: batch})
-            print("At epoch {} iteration {}, loss -> {}".format(epoch, index, l))
+            l, n, k, _ = sess.run([loss, nll, KL, ops], feed_dict={X: batch})
+            print("At epoch {} iteration {}, loss -> {}, negative log likelihood -> {}, KL divergence -> {}".format(epoch, index, l, n, k))
 
 
 if __name__ == "__main__":

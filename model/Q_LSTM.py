@@ -13,6 +13,7 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.util import nest
 
 from src.layer import layer_norm
+from src.LSTMOutputTuple import LSTMOutputTuple
 
 
 def _norm(g, b, inp, scope):
@@ -118,10 +119,12 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
         self._norm_shift = norm_shift
 
         if num_proj:
-            self._state_size = (rnn_cell_impl.LSTMStateTuple(num_units, num_proj))
+            self._state_size = (
+                rnn_cell_impl.LSTMStateTuple(num_units, num_proj))
             self._output_size = num_proj
         else:
-            self._state_size = (rnn_cell_impl.LSTMStateTuple(num_units, num_units))
+            self._state_size = (
+                rnn_cell_impl.LSTMStateTuple(num_units, num_units))
             self._output_size = num_units
 
     @property
@@ -162,6 +165,9 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
             raise ValueError("`args` must be specified")
         if not nest.is_sequence(args):
             args = [args]
+        if kernel_initializer is None:
+            kernel_initializer = self._initializer
+            bias_initializer = self._initializer
 
         # Calculate the total size of arguments on dimension 1.
         total_arg_size = 0
@@ -194,10 +200,8 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
             with vs.variable_scope(outer_scope) as inner_scope:
                 inner_scope.set_partitioner(None)
                 if bias_initializer is None:
-                    bias_initializer = init_ops.constant_initializer(
-                        0.0, dtype=dtype)
-                biases = vs.get_variable(
-                    "bias", [output_size], dtype=dtype, initializer=bias_initializer)
+                    bias_initializer = init_ops.constant_initializer(0.0, dtype=dtype)
+                biases = vs.get_variable("bias", [output_size], dtype=dtype, initializer=bias_initializer)
 
         if not layer_norm:
             res = nn_ops.bias_add(res, biases)
@@ -241,15 +245,13 @@ class LayerNormLSTMCell(rnn_cell_impl.RNNCell):
         with vs.variable_scope(scope, initializer=self._initializer) as unit_scope:
 
             # i = input_gate, j = new_input, f = forget_gate, o = output_gate
-            lstm_matrix = self._linear([inputs, m_prev],
-                                       4 * self._num_units,
-                                       bias=True,
-                                       bias_initializer=None,
-                                       layer_norm=self._layer_norm)
-
-            i, j, f, o = array_ops.split(value=lstm_matrix,
-                                         num_or_size_splits=4,
-                                         axis=1)
+            lstm_matrix = self._linear(
+                [inputs, m_prev],
+                4 * self._num_units,
+                bias=False,
+                bias_initializer=None,
+                layer_norm=self._layer_norm)
+            i, j, f, o = array_ops.split(value=lstm_matrix, num_or_size_splits=4, axis=1)
 
             if self._layer_norm:
                 i = _norm(self._norm_gain, self._norm_shift, i, "input")

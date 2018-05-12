@@ -4,6 +4,7 @@ from __future__ import division
 from __future__ import print_function
 
 from tensorflow.python.ops.array_ops import shape
+from tensorflow.python.ops import clip_ops
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import init_ops
 from tensorflow.python.ops import math_ops
@@ -12,7 +13,7 @@ from tensorflow.python.ops import rnn_cell_impl
 from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.util import nest
 from tensorflow.python.ops.random_ops import random_normal
-from tensorflow.python.ops.init_ops import random_normal_initializer
+from tensorflow.python.ops.init_ops import random_uniform_initializer
 from tensorflow.python.ops.math_ops import sqrt
 
 from src.LSTMOutputTuple import LSTMOutputTuple
@@ -28,7 +29,7 @@ class RNN(rnn_cell_impl.RNNCell):
         self._num_units = num_units
         self._activation = math_ops.tanh
         self._reuse = reuse
-        self._initializer = random_normal_initializer
+        self._initializer = random_uniform_initializer(minval=-0.1, maxval=0.1)
         self._state_size = (rnn_cell_impl.LSTMStateTuple(num_units, num_units))
         self._output_size = (LSTMOutputTuple(num_units, num_units, num_units))
 
@@ -68,6 +69,9 @@ class RNN(rnn_cell_impl.RNNCell):
             raise ValueError("`args` must be specified")
         if not nest.is_sequence(args):
             args = [args]
+        if kernel_initializer is None:
+            kernel_initializer = self._initializer
+            bias_initializer = self._initializer
 
         # Calculate the total size of arguments on dimension 1.
         total_arg_size = 0
@@ -101,10 +105,6 @@ class RNN(rnn_cell_impl.RNNCell):
 
             with vs.variable_scope(outer_scope) as inner_scope:
                 inner_scope.set_partitioner(None)
-
-                if bias_initializer is None:
-                    bias_initializer = init_ops.constant_initializer(0.0, dtype=dtype)
-
                 biases = vs.get_variable("bias",
                                          [output_size],
                                          dtype=dtype,
@@ -143,7 +143,7 @@ class RNN(rnn_cell_impl.RNNCell):
             # Calculate the covariance
             with vs.variable_scope("covariance") as cov_scope:
                 cov_t = self._linear(args=h_next, output_size=self._num_units)
-                cov_t = softplus(cov_t) + 1e-6
+                cov_t = softplus(cov_t)
             eps_t = random_normal(shape=[shape(inputs)[0], self._num_units])
             z_t = mu_t + sqrt(cov_t) * eps_t
 
