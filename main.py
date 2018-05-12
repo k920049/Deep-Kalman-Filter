@@ -24,17 +24,16 @@ def get_batch(input, batch_size):
 
 def Main():
 
-    # X_train, y_train, X_valid, y_valid = read_data()
-    dummy = np.random.randn(500, 250, 500)
+    X_train, y_train, X_valid, y_valid = read_data()
 
-    X = tf.placeholder(dtype=tf.float32, shape=[None, dummy.shape[1], dummy.shape[2]])
+    X = tf.placeholder(dtype=tf.float32, shape=[None, X_train.shape[1], X_train.shape[2]])
 
     with tf.name_scope("network"):
         network = Network(num_transition_layers=3,
                           num_transition_units=512,
                           num_emission_layers=3,
-                          num_emission_units=dummy.shape[2],
-                          time_step=dummy.shape[1],
+                          num_emission_units=X_train.shape[2],
+                          time_step=X_train.shape[1],
                           scope="network")
 
     with tf.name_scope("loss"):
@@ -49,6 +48,8 @@ def Main():
         generative_optimizer    = tf.train.AdamOptimizer()
         recognition_grad        = recognition_optimizer.compute_gradients(loss, recognition_vars)
         generative_grad         = generative_optimizer.compute_gradients(loss, generative_vars)
+        recognition_grad        = [(tf.clip_by_value(grad, -1.0, 1.0), var) for grad, var in recognition_grad]
+        generative_grad         = [(tf.clip_by_value(grad, -1.0, 1.0), var) for grad, var in generative_grad]
         recognition_ops         = recognition_optimizer.apply_gradients(recognition_grad)
         generative_ops          = generative_optimizer.apply_gradients(generative_grad)
 
@@ -64,17 +65,19 @@ def Main():
         epoch = 1
         index = 0
 
-        batch_gen = get_batch(dummy)
+        batch_gen = get_batch(X_train, 128)
 
         while True:
             index = index + 1
             try:
                 batch = next(batch_gen)
+                batch = np.stack(batch, axis=0)
             except StopIteration:
-                break
+                batch_gen = get_batch(X_train, 128)
+                continue
 
-            loss, _ = sess.run([loss, ops], feed_dict={X: batch})
-            print("At epoch {} iteration {}, loss -> {}".format(epoch, index, loss))
+            l, _ = sess.run([loss, ops], feed_dict={X: batch})
+            print("At epoch {} iteration {}, loss -> {}".format(epoch, index, l))
 
 
 if __name__ == "__main__":

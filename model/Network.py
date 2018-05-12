@@ -33,10 +33,10 @@ class Network(object):
 
         with tf.variable_scope(name_or_scope=self.scope, reuse=tf.AUTO_REUSE):
             with tf.variable_scope(name_or_scope="recognition"):
-                self.recognition    = LayerNormLSTMCell(num_units=self.num_transition_units, layer_norm=True)
+                # self.recognition    = LayerNormLSTMCell(num_units=self.num_transition_units, layer_norm=True)
                 self.aggregate      = RNN(num_units=self.num_transition_units)
 
-    def _transition(self, z, trans_params=None):
+    def _transition(self, z, eps=1e-3):
         """
         Transition function that generates next hidden units
         :param z: [batch size][time step][dimension], previous hidden states
@@ -59,9 +59,13 @@ class Network(object):
             cov = tf.layers.dense(inputs=hid,
                                   units=self.num_transition_units,
                                   kernel_initializer=tf.random_normal_initializer,
-                                  activation=tf.nn.softplus,
                                   name="cov")
-        return mu, cov
+            cov = tf.nn.softplus(cov, name="cov_plus") + 1e-6
+
+            assert_cov = tf.assert_positive(cov)
+
+            with tf.control_dependencies([assert_cov]):
+                return mu, cov
 
     def _emission(self, z):
         """
@@ -93,14 +97,10 @@ class Network(object):
         :param cov_prior:
         :return:
         """
-        assert_cov = tf.assert_positive(x=cov_q)
-        assert_cov_prior = tf.assert_positive(x=cov_prior)
-
-        with tf.control_dependencies(control_inputs=[assert_cov, assert_cov_prior]):
-            diff_mu = mu_prior - mu_q
-            KL = tf.log(cov_prior) - tf.log(cov_q) - 1.0 + cov_q / cov_prior + diff_mu ** 2 / cov_prior
-            KL = 0.5 * tf.reduce_sum(input_tensor=KL, axis=2)
-            KL_sum = tf.reduce_sum(input_tensor=KL)
+        diff_mu = mu_prior - mu_q
+        KL = tf.log(cov_prior) - tf.log(cov_q) - 1.0 + cov_q / cov_prior + diff_mu ** 2 / cov_prior
+        KL = 0.5 * tf.reduce_sum(input_tensor=KL, axis=2)
+        KL_sum = tf.reduce_sum(input_tensor=KL)
 
         return KL_sum
 
@@ -112,36 +112,40 @@ class Network(object):
         :param anneal:
         :return:
         """
-        embedding = tf.layers.dense(inputs=X,
-                                    units=self.num_transition_units,
-                                    kernel_initializer=tf.random_normal_initializer,
-                                    activation=tf.nn.tanh,
-                                    name="embedding")
-        print(embedding.shape)
-        outputs, states = tf.nn.dynamic_rnn(cell=self.recognition, inputs=embedding, dtype=tf.float32)
-        assert isinstance(states, LSTMStateTuple), \
-            "Error: In recognition network, the states calculated is not type \'LSTMStateTuple\'"
 
-        states = outputs
-        states = tf.reverse(states, [1])
+        outputs, states = tf.nn.dynamic_rnn(cell=self.aggregate, inputs=X, dtype=tf.float32)
+        assert isinstance(outputs, LSTMOutputTuple), "Error: The output is not LSTMOutputTuple"
 
-        z_q, mu_q, cov_q = self._aggregateLSTM(hidden_state=states)
+        z_q     = outputs.z
+        mu_q    = outputs.mu
+        cov_q   = outputs.cov
 
-        return z_q, mu_q, cov_q
+        z_q     = tf.reverse(z_q, axis=[1])
+        mu_q    = tf.reverse(mu_q, axis=[1])
+        cov_q   = tf.reverse(cov_q, axis=[1])
 
+        assert_cov = tf.assert_positive(cov_q)
+
+        with tf.control_dependencies([assert_cov]):
+            return z_q, mu_q, cov_q
+    """
     def _aggregateLSTM(self, hidden_state):
-        """
+        
         Compute parameters of Q distribution for later use
         :param hidden_state: [time step][batch size][dimension]
         :return: means and covariances
-        """
+        
         outputs, _ = tf.nn.dynamic_rnn(cell=self.aggregate, inputs=hidden_state, dtype=tf.float32)
-        assert isinstance(outputs, LSTMOutputTuple), \
-            "Error: In aggregation network, the outputs calculated is not type \'LSTMOutputTuple\'"
+        assert isinstance(outputs, LSTMOutputTuple), "Error: In aggregation network, the outputs calculated is not type \'LSTMOutputTuple\'"
 
-        (z, mu, cov) = outputs
-        return z, mu, cov
+        z = outputs.z
+        mu = outputs.mu
+        cov = outputs.cov
 
+        assert_cov = tf.assert_positive(cov)
+        with tf.control_dependencies([assert_cov]):
+            return z, mu, cov
+    """
     def _nll_gaussian(self, mu, logcov, X, params = None):
         """
         Calculaate negative log likelihood
@@ -151,7 +155,8 @@ class Network(object):
         :param params:
         :return:
         """
-        nll = 0.5 * (np.log(2 * np.pi) + logcov + (X - mu) ** 2 / tf.exp(logcov))
+        nll = 0.5 * (tf.log(2 * np.pi) + logcov + tf.divide(tf.square(X - mu), tf.exp(logcov)))
+        nll = tf.clip_by_value(nll, 1e-10, 1.0)
         return nll
 
     def neg_elbo(self, X, anneal=1.0):
@@ -163,14 +168,18 @@ class Network(object):
 
             with tf.variable_scope(name_or_scope="generative"):
                 mu_trans, cov_trans = self._transition(z_q)
-                mu_prior = tf.concat([tf.zeros_like(mu_trans[:, 0, :]), mu_trans[:, :-1, :]], axis=1)
-                cov_prior = tf.concat([tf.ones_like(mu_trans[:, 0, :]), cov_trans[:, :-1, :]], axis=1)
+                mu_shape = tf.shape(mu_trans)
+                cov_shape = tf.shape(cov_trans)
+                mean_init = tf.zeros(shape=[mu_shape[0], 1, mu_shape[2]], dtype=tf.float32)
+                cov_init = tf.ones(shape=[cov_shape[0], 1, cov_shape[2]], dtype=tf.float32)
+                mu_prior = tf.concat([mean_init, mu_trans[:, :-1, :]], axis=1)
+                cov_prior = tf.concat([cov_init, cov_trans[:, :-1, :]], axis=1)
 
                 KL = self._temporalKL(mu_q, cov_q, mu_prior, cov_prior)
                 hid_out = self._emission(z_q)
 
                 mu_hid = tf.slice(hid_out, [0, 0, 0], [-1, -1, self.num_emission_units])
-                logcov_hid = tf.slice(hid_out, [0, 0, self.num_emission_units], [-1, -1, 2 * self.num_emission_units])
+                logcov_hid = tf.slice(hid_out, [0, 0, self.num_emission_units], [-1, -1, self.num_emission_units])
                 nll_metric = self._nll_gaussian(mu_hid, logcov_hid, X)
                 nll = tf.reduce_sum(nll_metric)
                 # Evaluate negative ELBO

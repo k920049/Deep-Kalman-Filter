@@ -143,7 +143,7 @@ class RNN(rnn_cell_impl.RNNCell):
             # Calculate the covariance
             with vs.variable_scope("covariance") as cov_scope:
                 cov_t = self._linear(args=h_next, output_size=self._num_units)
-                cov_t = softplus(cov_t)
+                cov_t = softplus(cov_t) + 1e-6
             eps_t = random_normal(shape=[shape(inputs)[0], self._num_units])
             z_t = mu_t + sqrt(cov_t) * eps_t
 
