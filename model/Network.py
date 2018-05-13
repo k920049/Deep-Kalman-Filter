@@ -106,9 +106,10 @@ class Network(object):
         """
         diff_mu = mu_prior - mu_q
         KL = tf.log(cov_prior) - tf.log(cov_q) - 1.0 + cov_q / cov_prior + diff_mu ** 2 / cov_prior
+        KL_mean = 0.5 * tf.reduce_mean(input_tensor=KL, axis=2)
         KL = 0.5 * tf.reduce_sum(input_tensor=KL, axis=2)
         KL_sum = tf.reduce_sum(input_tensor=KL)
-        KL_mean = tf.reduce_mean(input_tensor=KL)
+        KL_mean = tf.reduce_mean(input_tensor=KL_mean)
 
         return KL_sum, KL_mean
 
@@ -159,7 +160,9 @@ class Network(object):
         :param params:
         :return:
         """
-        nll = 0.5 * (tf.log(2 * np.pi) + logcov + tf.divide(tf.square(X - mu), tf.exp(logcov)))
+        nll = 0.5 * ((tf.log(2 * np.pi) + logcov) + tf.divide(tf.square(X - mu), tf.exp(logcov)))
+        nll_max = tf.reduce_max(nll)
+        nll = tf.clip_by_value(nll, clip_value_min=0.0, clip_value_max=nll_max)
         return nll
 
     def neg_elbo(self, X, anneal=1.0):
@@ -181,12 +184,11 @@ class Network(object):
 
             mu_hid = tf.slice(hid_out, [0, 0, 0], [-1, -1, self.num_emission_units])
             logcov_hid = tf.slice(hid_out, [0, 0, self.num_emission_units], [-1, -1, self.num_emission_units])
-            logcov_hid = tf.clip_by_value(logcov_hid, clip_value_min=-16.0, clip_value_max=16.0)
+            logcov_hid = tf.clip_by_value(logcov_hid, clip_value_min=-8.0, clip_value_max=16.0)
             nll_metric = self._nll_gaussian(mu_hid, logcov_hid, X)
             nll = tf.reduce_sum(nll_metric)
             # Evaluate negative ELBO
             neg_elbo = nll + anneal * KL
-
         return neg_elbo, nll, KL_mean
 
     def get_variable(self, scope):

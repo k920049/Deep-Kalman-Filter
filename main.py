@@ -81,10 +81,10 @@ def Main():
         batch_gen = get_batch(X_train, 128)
 
         while True:
-            index = index + 1
             try:
                 batch = next(batch_gen)
                 batch = np.stack(batch, axis=0)
+                index = index + 1
             except StopIteration:
                 batch_gen = get_batch(X_train, 128)
                 epoch = epoch + 1
